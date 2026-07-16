@@ -1,0 +1,619 @@
+import tkinter as tk
+from tkinter import ttk, messagebox
+import json
+from datetime import datetime, timedelta
+import calendar
+from collections import defaultdict
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import os
+
+class FoodExpenseTracker:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Калькулятор затрат на еду")
+        self.root.geometry("1200x700")
+        
+        # Файл для хранения данных
+        self.data_file = "food_expenses.json"
+        
+        # Загрузка данных
+        self.load_data()
+        
+        # Создание интерфейса
+        self.create_widgets()
+        
+        # Обновление статистики
+        self.update_statistics()
+        self.update_product_list()
+        self.update_monthly_stats()
+    
+    def load_data(self):
+        """Загрузка данных из файла"""
+        if os.path.exists(self.data_file):
+            with open(self.data_file, 'r', encoding='utf-8') as f:
+                self.data = json.load(f)
+        else:
+            self.data = {
+                "products": [],  # Список продуктов с ценами
+                "expenses": []   # Список покупок
+            }
+    
+    def save_data(self):
+        """Сохранение данных в файл"""
+        with open(self.data_file, 'w', encoding='utf-8') as f:
+            json.dump(self.data, f, ensure_ascii=False, indent=2)
+    
+    def create_widgets(self):
+        """Создание интерфейса"""
+        # Создаем вкладки
+        notebook = ttk.Notebook(self.root)
+        notebook.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        # Вкладка добавления расходов
+        self.expense_frame = ttk.Frame(notebook)
+        notebook.add(self.expense_frame, text='Добавление расходов')
+        self.create_expense_tab()
+        
+        # Вкладка списка продуктов
+        self.products_frame = ttk.Frame(notebook)
+        notebook.add(self.products_frame, text='Список продуктов')
+        self.create_products_tab()
+        
+        # Вкладка статистики
+        self.stats_frame = ttk.Frame(notebook)
+        notebook.add(self.stats_frame, text='Статистика')
+        self.create_stats_tab()
+    
+    def create_expense_tab(self):
+        """Создание вкладки добавления расходов"""
+        # Фрейм для добавления нового расхода
+        add_frame = ttk.LabelFrame(self.expense_frame, text="Добавить покупку", padding=10)
+        add_frame.pack(fill='x', padx=10, pady=10)
+        
+        # Выбор продукта
+        ttk.Label(add_frame, text="Продукт:").grid(row=0, column=0, sticky='w', pady=5)
+        self.product_var = tk.StringVar()
+        self.product_combo = ttk.Combobox(add_frame, textvariable=self.product_var, width=30)
+        self.product_combo.grid(row=0, column=1, padx=5, pady=5)
+        
+        # Количество
+        ttk.Label(add_frame, text="Количество:").grid(row=1, column=0, sticky='w', pady=5)
+        self.quantity_var = tk.StringVar(value="1")
+        self.quantity_spin = ttk.Spinbox(add_frame, from_=0.1, to=100, increment=0.1, 
+                                        textvariable=self.quantity_var, width=10)
+        self.quantity_spin.grid(row=1, column=1, sticky='w', padx=5, pady=5)
+        
+        # Цена за единицу (автозаполнение)
+        ttk.Label(add_frame, text="Цена за ед.:").grid(row=2, column=0, sticky='w', pady=5)
+        self.price_var = tk.StringVar()
+        self.price_entry = ttk.Entry(add_frame, textvariable=self.price_var, width=15)
+        self.price_entry.grid(row=2, column=1, sticky='w', padx=5, pady=5)
+        
+        # Дата покупки
+        ttk.Label(add_frame, text="Дата:").grid(row=3, column=0, sticky='w', pady=5)
+        self.date_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
+        self.date_entry = ttk.Entry(add_frame, textvariable=self.date_var, width=15)
+        self.date_entry.grid(row=3, column=1, sticky='w', padx=5, pady=5)
+        
+        # Магазин
+        ttk.Label(add_frame, text="Магазин:").grid(row=4, column=0, sticky='w', pady=5)
+        self.store_var = tk.StringVar()
+        self.store_entry = ttk.Entry(add_frame, textvariable=self.store_var, width=30)
+        self.store_entry.grid(row=4, column=1, sticky='w', padx=5, pady=5)
+        
+        # Кнопка добавления
+        ttk.Button(add_frame, text="Добавить покупку", command=self.add_expense).grid(
+            row=5, column=1, sticky='e', pady=10)
+        
+        # Автозаполнение цены при выборе продукта
+        self.product_combo.bind('<<ComboboxSelected>>', self.fill_price)
+        
+        # Таблица последних расходов
+        history_frame = ttk.LabelFrame(self.expense_frame, text="История покупок", padding=10)
+        history_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        # Создаем таблицу
+        columns = ('date', 'product', 'quantity', 'price', 'total', 'store')
+        self.expense_tree = ttk.Treeview(history_frame, columns=columns, show='headings')
+        
+        # Заголовки
+        self.expense_tree.heading('date', text='Дата')
+        self.expense_tree.heading('product', text='Продукт')
+        self.expense_tree.heading('quantity', text='Количество')
+        self.expense_tree.heading('price', text='Цена за ед.')
+        self.expense_tree.heading('total', text='Сумма')
+        self.expense_tree.heading('store', text='Магазин')
+        
+        # Ширина колонок
+        self.expense_tree.column('date', width=100)
+        self.expense_tree.column('product', width=200)
+        self.expense_tree.column('quantity', width=80)
+        self.expense_tree.column('price', width=80)
+        self.expense_tree.column('total', width=80)
+        self.expense_tree.column('store', width=150)
+        
+        # Добавляем скроллбар
+        scrollbar = ttk.Scrollbar(history_frame, orient='vertical', command=self.expense_tree.yview)
+        self.expense_tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.expense_tree.pack(side='left', fill='both', expand=True)
+        scrollbar.pack(side='right', fill='y')
+        
+        # Кнопки управления
+        btn_frame = ttk.Frame(history_frame)
+        btn_frame.pack(fill='x', pady=5)
+        
+        ttk.Button(btn_frame, text="Удалить выбранное", 
+                  command=self.delete_expense).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Обновить список", 
+                  command=self.update_expense_list).pack(side='left', padx=5)
+    
+    def create_products_tab(self):
+        """Создание вкладки управления продуктами"""
+        # Фрейм добавления нового продукта
+        add_product_frame = ttk.LabelFrame(self.products_frame, text="Добавить/обновить продукт", padding=10)
+        add_product_frame.pack(fill='x', padx=10, pady=10)
+        
+        ttk.Label(add_product_frame, text="Название:").grid(row=0, column=0, sticky='w', pady=5)
+        self.new_product_name = tk.StringVar()
+        ttk.Entry(add_product_frame, textvariable=self.new_product_name, width=30).grid(
+            row=0, column=1, padx=5, pady=5)
+        
+        ttk.Label(add_product_frame, text="Категория:").grid(row=1, column=0, sticky='w', pady=5)
+        self.new_product_category = tk.StringVar()
+        categories = ['Овощи', 'Фрукты', 'Мясо', 'Молочные', 'Хлебобулочные', 
+                     'Напитки', 'Бакалея', 'Сладости', 'Другое']
+        self.category_combo = ttk.Combobox(add_product_frame, textvariable=self.new_product_category,
+                                          values=categories, width=27)
+        self.category_combo.grid(row=1, column=1, padx=5, pady=5)
+        
+        ttk.Label(add_product_frame, text="Стандартная цена:").grid(row=2, column=0, sticky='w', pady=5)
+        self.new_product_price = tk.StringVar()
+        ttk.Entry(add_product_frame, textvariable=self.new_product_price, width=15).grid(
+            row=2, column=1, sticky='w', padx=5, pady=5)
+        
+        ttk.Label(add_product_frame, text="Единица измерения:").grid(row=3, column=0, sticky='w', pady=5)
+        self.new_product_unit = tk.StringVar(value="шт")
+        units = ['шт', 'кг', 'л', 'г', 'мл', 'уп']
+        self.unit_combo = ttk.Combobox(add_product_frame, textvariable=self.new_product_unit,
+                                      values=units, width=10)
+        self.unit_combo.grid(row=3, column=1, sticky='w', padx=5, pady=5)
+        
+        ttk.Button(add_product_frame, text="Добавить продукт", 
+                  command=self.add_product).grid(row=4, column=1, sticky='e', pady=10)
+        
+        # Список продуктов
+        products_list_frame = ttk.LabelFrame(self.products_frame, text="Список продуктов", padding=10)
+        products_list_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        # Таблица продуктов
+        columns = ('name', 'category', 'price', 'unit')
+        self.products_tree = ttk.Treeview(products_list_frame, columns=columns, show='headings')
+        
+        self.products_tree.heading('name', text='Название')
+        self.products_tree.heading('category', text='Категория')
+        self.products_tree.heading('price', text='Цена')
+        self.products_tree.heading('unit', text='Ед. изм.')
+        
+        self.products_tree.column('name', width=200)
+        self.products_tree.column('category', width=150)
+        self.products_tree.column('price', width=100)
+        self.products_tree.column('unit', width=100)
+        
+        scrollbar = ttk.Scrollbar(products_list_frame, orient='vertical', command=self.products_tree.yview)
+        self.products_tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.products_tree.pack(side='left', fill='both', expand=True)
+        scrollbar.pack(side='right', fill='y')
+        
+        # Кнопки управления
+        btn_frame = ttk.Frame(products_list_frame)
+        btn_frame.pack(fill='x', pady=5)
+        
+        ttk.Button(btn_frame, text="Удалить продукт", 
+                  command=self.delete_product).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Обновить цену", 
+                  command=self.update_price).pack(side='left', padx=5)
+    
+    def create_stats_tab(self):
+        """Создание вкладки статистики"""
+        # Верхняя панель с общей информацией
+        info_frame = ttk.Frame(self.stats_frame)
+        info_frame.pack(fill='x', padx=10, pady=10)
+        
+        # Месячные затраты
+        monthly_frame = ttk.LabelFrame(info_frame, text="Затраты за месяц", padding=10)
+        monthly_frame.pack(side='left', fill='both', expand=True, padx=5)
+        
+        self.monthly_total_label = ttk.Label(monthly_frame, text="0 ₽", 
+                                            font=('Arial', 24, 'bold'))
+        self.monthly_total_label.pack()
+        
+        # Средние затраты в день
+        daily_frame = ttk.LabelFrame(info_frame, text="Среднее в день", padding=10)
+        daily_frame.pack(side='left', fill='both', expand=True, padx=5)
+        
+        self.daily_avg_label = ttk.Label(daily_frame, text="0 ₽", 
+                                        font=('Arial', 24, 'bold'))
+        self.daily_avg_label.pack()
+        
+        # Прогноз на месяц
+        forecast_frame = ttk.LabelFrame(info_frame, text="Прогноз на месяц", padding=10)
+        forecast_frame.pack(side='left', fill='both', expand=True, padx=5)
+        
+        self.forecast_label = ttk.Label(forecast_frame, text="0 ₽", 
+                                       font=('Arial', 24, 'bold'))
+        self.forecast_label.pack()
+        
+        # График
+        self.create_chart()
+        
+        # Детальная статистика по категориям
+        self.create_category_stats()
+    
+    def create_chart(self):
+        """Создание графика расходов"""
+        chart_frame = ttk.LabelFrame(self.stats_frame, text="График расходов по дням", padding=10)
+        chart_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        # Создаем фигуру matplotlib
+        self.figure, self.ax = plt.subplots(figsize=(8, 3))
+        self.canvas = FigureCanvasTkAgg(self.figure, chart_frame)
+        self.canvas.get_tk_widget().pack(fill='both', expand=True)
+    
+    def create_category_stats(self):
+        """Создание статистики по категориям"""
+        cat_frame = ttk.LabelFrame(self.stats_frame, text="Расходы по категориям", padding=10)
+        cat_frame.pack(fill='x', padx=10, pady=10)
+        
+        self.category_tree = ttk.Treeview(cat_frame, 
+                                         columns=('category', 'total', 'percentage'), 
+                                         show='headings', height=5)
+        
+        self.category_tree.heading('category', text='Категория')
+        self.category_tree.heading('total', text='Сумма')
+        self.category_tree.heading('percentage', text='% от общих затрат')
+        
+        self.category_tree.column('category', width=200)
+        self.category_tree.column('total', width=150)
+        self.category_tree.column('percentage', width=150)
+        
+        self.category_tree.pack()
+    
+    def add_expense(self):
+        """Добавление новой покупки"""
+        product = self.product_var.get()
+        try:
+            quantity = float(self.quantity_var.get())
+            price = float(self.price_var.get())
+        except ValueError:
+            messagebox.showerror("Ошибка", "Пожалуйста, введите корректные числа")
+            return
+        
+        date = self.date_var.get()
+        store = self.store_var.get()
+        
+        if not product:
+            messagebox.showerror("Ошибка", "Пожалуйста, выберите продукт")
+            return
+        
+        # Проверяем дату
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            messagebox.showerror("Ошибка", "Неверный формат даты. Используйте YYYY-MM-DD")
+            return
+        
+        total = quantity * price
+        
+        # Добавляем покупку в список
+        expense = {
+            "date": date,
+            "product": product,
+            "quantity": quantity,
+            "price": price,
+            "total": total,
+            "store": store
+        }
+        
+        self.data["expenses"].append(expense)
+        self.save_data()
+        
+        # Очищаем поля
+        self.product_var.set("")
+        self.quantity_var.set("1")
+        self.price_var.set("")
+        self.store_var.set("")
+        
+        # Обновляем отображение
+        self.update_expense_list()
+        self.update_statistics()
+        messagebox.showinfo("Успех", "Покупка добавлена!")
+    
+    def fill_price(self, event=None):
+        """Автозаполнение цены при выборе продукта"""
+        product_name = self.product_var.get()
+        for product in self.data["products"]:
+            if product["name"] == product_name:
+                self.price_var.set(str(product["default_price"]))
+                break
+    
+    def add_product(self):
+        """Добавление нового продукта"""
+        name = self.new_product_name.get()
+        category = self.new_product_category.get()
+        price = self.new_product_price.get()
+        unit = self.new_product_unit.get()
+        
+        if not name:
+            messagebox.showerror("Ошибка", "Введите название продукта")
+            return
+        
+        try:
+            price = float(price)
+        except ValueError:
+            messagebox.showerror("Ошибка", "Введите корректную цену")
+            return
+        
+        # Проверяем, существует ли уже такой продукт
+        for product in self.data["products"]:
+            if product["name"] == name:
+                # Обновляем существующий
+                product["category"] = category
+                product["default_price"] = price
+                product["unit"] = unit
+                self.save_data()
+                self.update_product_list()
+                self.update_statistics()
+                messagebox.showinfo("Успех", "Продукт обновлен!")
+                return
+        
+        # Добавляем новый продукт
+        new_product = {
+            "name": name,
+            "category": category if category else "Другое",
+            "default_price": price,
+            "unit": unit
+        }
+        
+        self.data["products"].append(new_product)
+        self.save_data()
+        
+        # Очищаем поля
+        self.new_product_name.set("")
+        self.new_product_category.set("")
+        self.new_product_price.set("")
+        
+        self.update_product_list()
+        self.update_statistics()
+        messagebox.showinfo("Успех", "Продукт добавлен!")
+    
+    def update_product_list(self):
+        """Обновление списка продуктов в комбобоксе и таблице"""
+        # Обновляем комбобокс
+        product_names = [p["name"] for p in self.data["products"]]
+        self.product_combo['values'] = product_names
+        
+        # Обновляем таблицу продуктов
+        for item in self.products_tree.get_children():
+            self.products_tree.delete(item)
+        
+        for product in self.data["products"]:
+            self.products_tree.insert('', 'end', values=(
+                product["name"],
+                product.get("category", "Другое"),
+                f"{product['default_price']} ₽",
+                product.get("unit", "шт")
+            ))
+    
+    def update_expense_list(self):
+        """Обновление списка покупок"""
+        for item in self.expense_tree.get_children():
+            self.expense_tree.delete(item)
+        
+        # Сортируем по дате (новые сверху)
+        sorted_expenses = sorted(self.data["expenses"], 
+                               key=lambda x: x["date"], 
+                               reverse=True)
+        
+        for expense in sorted_expenses[-50:]:  # Показываем последние 50
+            self.expense_tree.insert('', 'end', values=(
+                expense["date"],
+                expense["product"],
+                expense["quantity"],
+                f"{expense['price']} ₽",
+                f"{expense['total']:.2f} ₽",
+                expense.get("store", "")
+            ))
+    
+    def update_statistics(self):
+        """Обновление статистики"""
+        now = datetime.now()
+        current_month = now.month
+        current_year = now.year
+        
+        # Фильтруем расходы за текущий месяц
+        monthly_expenses = []
+        for exp in self.data["expenses"]:
+            exp_date = datetime.strptime(exp["date"], "%Y-%m-%d")
+            if exp_date.month == current_month and exp_date.year == current_year:
+                monthly_expenses.append(exp)
+        
+        # Подсчитываем общую сумму
+        total_monthly = sum(exp["total"] for exp in monthly_expenses)
+        
+        # Среднее в день
+        days_passed = now.day
+        daily_avg = total_monthly / days_passed if days_passed > 0 else 0
+        
+        # Прогноз на месяц
+        days_in_month = calendar.monthrange(current_year, current_month)[1]
+        forecast = daily_avg * days_in_month
+        
+        # Обновляем метки
+        self.monthly_total_label.config(text=f"{total_monthly:.2f} ₽")
+        self.daily_avg_label.config(text=f"{daily_avg:.2f} ₽")
+        self.forecast_label.config(text=f"{forecast:.2f} ₽")
+        
+        # Обновляем график
+        self.update_chart(monthly_expenses)
+        
+        # Обновляем статистику по категориям
+        self.update_category_stats(monthly_expenses)
+    
+    def update_chart(self, monthly_expenses):
+        """Обновление графика расходов"""
+        self.ax.clear()
+        
+        if not monthly_expenses:
+            self.ax.text(0.5, 0.5, 'Нет данных за текущий месяц', 
+                       ha='center', va='center', transform=self.ax.transAxes)
+            self.canvas.draw()
+            return
+        
+        # Группируем расходы по дням
+        daily_expenses = defaultdict(float)
+        for exp in monthly_expenses:
+            day = datetime.strptime(exp["date"], "%Y-%m-%d").day
+            daily_expenses[day] += exp["total"]
+        
+        days = sorted(daily_expenses.keys())
+        amounts = [daily_expenses[day] for day in days]
+        
+        # Создаем график
+        self.ax.bar(days, amounts, color='skyblue', alpha=0.7)
+        self.ax.plot(days, amounts, 'ro-', linewidth=2, markersize=6)
+        self.ax.set_xlabel('День месяца')
+        self.ax.set_ylabel('Сумма (₽)')
+        self.ax.set_title('Расходы по дням')
+        self.ax.grid(True, alpha=0.3)
+        
+        # Добавляем подписи значений
+        for i, (day, amount) in enumerate(zip(days, amounts)):
+            self.ax.text(day, amount, f'{amount:.0f}', ha='center', va='bottom')
+        
+        self.figure.tight_layout()
+        self.canvas.draw()
+    
+    def update_category_stats(self, monthly_expenses):
+        """Обновление статистики по категориям"""
+        # Очищаем таблицу
+        for item in self.category_tree.get_children():
+            self.category_tree.delete(item)
+        
+        # Создаем словарь продуктов
+        product_dict = {p["name"]: p for p in self.data["products"]}
+        
+        # Группируем по категориям
+        category_expenses = defaultdict(float)
+        total = 0
+        
+        for exp in monthly_expenses:
+            product = product_dict.get(exp["product"])
+            if product:
+                category = product.get("category", "Другое")
+                category_expenses[category] += exp["total"]
+                total += exp["total"]
+        
+        # Добавляем в таблицу
+        for category, amount in sorted(category_expenses.items(), 
+                                      key=lambda x: x[1], reverse=True):
+            percentage = (amount / total * 100) if total > 0 else 0
+            self.category_tree.insert('', 'end', values=(
+                category,
+                f"{amount:.2f} ₽",
+                f"{percentage:.1f}%"
+            ))
+    
+    def delete_expense(self):
+        """Удаление выбранной покупки"""
+        selected = self.expense_tree.selection()
+        if not selected:
+            messagebox.showwarning("Предупреждение", "Выберите покупку для удаления")
+            return
+        
+        # Получаем значения выбранной строки
+        values = self.expense_tree.item(selected[0])['values']
+        
+        # Ищем и удаляем запись
+        for i, exp in enumerate(self.data["expenses"]):
+            if (exp["date"] == values[0] and 
+                exp["product"] == values[1] and 
+                exp["quantity"] == float(values[2]) and
+                exp["total"] == float(values[4].replace(" ₽", ""))):
+                
+                if messagebox.askyesno("Подтверждение", 
+                                      f"Удалить покупку {values[1]} от {values[0]}?"):
+                    del self.data["expenses"][i]
+                    self.save_data()
+                    self.update_expense_list()
+                    self.update_statistics()
+                break
+    
+    def delete_product(self):
+        """Удаление продукта"""
+        selected = self.products_tree.selection()
+        if not selected:
+            messagebox.showwarning("Предупреждение", "Выберите продукт для удаления")
+            return
+        
+        values = self.products_tree.item(selected[0])['values']
+        product_name = values[0]
+        
+        if messagebox.askyesno("Подтверждение", 
+                              f"Удалить продукт {product_name}? Связанные покупки останутся."):
+            self.data["products"] = [p for p in self.data["products"] 
+                                    if p["name"] != product_name]
+            self.save_data()
+            self.update_product_list()
+            self.update_statistics()
+    
+    def update_price(self):
+        """Обновление цены продукта"""
+        selected = self.products_tree.selection()
+        if not selected:
+            messagebox.showwarning("Предупреждение", "Выберите продукт для обновления цены")
+            return
+        
+        values = self.products_tree.item(selected[0])['values']
+        product_name = values[0]
+        
+        # Находим продукт
+        for product in self.data["products"]:
+            if product["name"] == product_name:
+                # Открываем диалог для ввода новой цены
+                dialog = tk.Toplevel(self.root)
+                dialog.title("Обновить цену")
+                dialog.geometry("300x150")
+                
+                ttk.Label(dialog, text=f"Новая цена для {product_name}:").pack(pady=10)
+                new_price_var = tk.StringVar(value=str(product["default_price"]))
+                ttk.Entry(dialog, textvariable=new_price_var).pack(pady=10)
+                
+                def save_new_price():
+                    try:
+                        new_price = float(new_price_var.get())
+                        product["default_price"] = new_price
+                        self.save_data()
+                        self.update_product_list()
+                        dialog.destroy()
+                        messagebox.showinfo("Успех", "Цена обновлена!")
+                    except ValueError:
+                        messagebox.showerror("Ошибка", "Введите корректную цену")
+                
+                ttk.Button(dialog, text="Сохранить", command=save_new_price).pack(pady=10)
+                break
+    
+    def update_monthly_stats(self):
+        """Обновление месячной статистики"""
+        self.update_statistics()
+        self.update_expense_list()
+
+def main():
+    root = tk.Tk()
+    app = FoodExpenseTracker(root)
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()

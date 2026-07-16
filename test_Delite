@@ -1,0 +1,46 @@
+"""
+Тест удаления сотрудника
+Запуск: py test_delete.py
+"""
+
+from database import Database
+
+# Создаем временную базу в памяти
+db = Database(":memory:")
+
+print("1. Добавляем клиента...")
+success, msg = db.add_client("Тестовый ИП", "123456789012")
+print(f"   Результат: {msg}")
+
+# Получаем ID клиента
+clients = db.get_all_clients()
+client_id = clients[0][0]
+print(f"   ID клиента: {client_id}")
+
+print("\n2. Добавляем сотрудника...")
+success, msg = db.add_employee(client_id, "Иванов Иван", 50000, "2024-01-01")
+print(f"   Результат: {msg}")
+
+print("\n3. Смотрим список сотрудников:")
+employees = db.get_employees(client_id)
+for emp in employees:
+    print(f"   ID={emp[0]}, Имя={emp[1]}, Оклад={emp[2]}")
+
+if employees:
+    emp_id = employees[0][0]
+    print(f"\n4. Пробуем удалить сотрудника ID={emp_id}...")
+    
+    # Проверяем, есть ли метод delete_employee
+    if hasattr(db, 'delete_employee'):
+        print("   Метод delete_employee НАЙДЕН")
+        success, msg = db.delete_employee(emp_id)
+        print(f"   Результат: {msg}")
+        
+        print("\n5. Проверяем, что сотрудник удален:")
+        employees = db.get_employees(client_id)
+        print(f"   Осталось сотрудников: {len(employees)}")
+    else:
+        print("   ❌ Метод delete_employee НЕ НАЙДЕН в database.py!")
+        print("   Нужно добавить метод в класс Database")
+else:
+    print("   Сотрудников нет!")
