@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox
 from datetime import datetime
 from payroll_calculator import PayrollCalculator
 import logging
@@ -12,6 +12,8 @@ class CalculationsTab:
         self.app = app
         self.clients = []
         self.calculator = PayrollCalculator(calendar)
+        self.current_employees = []  # Текущий список сотрудников для расчета
+        self.editable_entries = {}  # Словарь для хранения Entry виджетов
         
         self.create_widgets()
         logging.info("Вкладка 'Расчеты' создана")
@@ -28,6 +30,7 @@ class CalculationsTab:
         ttk.Label(row1, text="🏢 Клиент:").pack(side='left', padx=5)
         self.calc_client_cb = ttk.Combobox(row1, state='readonly', width=30)
         self.calc_client_cb.pack(side='left', padx=5)
+        self.calc_client_cb.bind('<<ComboboxSelected>>', self.on_client_changed)
         
         ttk.Label(row1, text="📅 Месяц:").pack(side='left', padx=5)
         self.month_var = tk.StringVar()
@@ -37,6 +40,7 @@ class CalculationsTab:
                                      state='readonly', width=15, values=months)
         self.month_cb.current(datetime.now().month - 1)
         self.month_cb.pack(side='left', padx=5)
+        self.month_cb.bind('<<ComboboxSelected>>', self.update_month_info)
         
         ttk.Label(row1, text="📆 Год:").pack(side='left', padx=5)
         self.year_var = tk.StringVar()
@@ -45,6 +49,7 @@ class CalculationsTab:
                                    state='readonly', width=8, values=years)
         self.year_cb.current(years.index(str(datetime.now().year)))
         self.year_cb.pack(side='left', padx=5)
+        self.year_cb.bind('<<ComboboxSelected>>', self.update_month_info)
         
         # Вторая строка - тип выплаты и кнопка
         row2 = ttk.Frame(top_frame)
@@ -53,10 +58,12 @@ class CalculationsTab:
         self.payment_type = tk.StringVar(value="salary")
         ttk.Radiobutton(row2, text="💵 Аванс (до 15 числа)", 
                        variable=self.payment_type, 
-                       value="advance").pack(side='left', padx=10)
+                       value="advance",
+                       command=self.on_payment_type_changed).pack(side='left', padx=10)
         ttk.Radiobutton(row2, text="💰 Зарплата (за месяц)", 
                        variable=self.payment_type, 
-                       value="salary").pack(side='left', padx=10)
+                       value="salary",
+                       command=self.on_payment_type_changed).pack(side='left', padx=10)
         
         ttk.Button(row2, text="🧮 Рассчитать", 
                   command=self.calculate_payroll).pack(side='right', padx=20)
@@ -65,19 +72,78 @@ class CalculationsTab:
         self.month_info_label = ttk.Label(top_frame, text="", foreground='blue')
         self.month_info_label.pack(pady=5)
         
-        # Обновляем информацию при изменении месяца/года
-        self.month_cb.bind('<<ComboboxSelected>>', self.update_month_info)
-        self.year_cb.bind('<<ComboboxSelected>>', self.update_month_info)
+        # Основная панель с таблицей и детализацией
+        main_panel = ttk.Frame(self.parent)
+        main_panel.pack(fill='both', expand=True, padx=5, pady=5)
         
-        # Результаты расчета
-        result_frame = ttk.LabelFrame(self.parent, text="Результаты расчета", padding=10)
-        result_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        # Левая часть - таблица с сотрудниками
+        table_frame = ttk.LabelFrame(main_panel, text="Ведомость начисления", padding=10)
+        table_frame.pack(side='left', fill='both', expand=True)
         
-        self.result_text = scrolledtext.ScrolledText(result_frame, height=15, 
-                                                     font=("Consolas", 10))
-        self.result_text.pack(fill='both', expand=True)
+        # Создаем Treeview с прокрутками
+        columns = ('name', 'salary', 'norm_days', 'worked_days', 'accrued', 'ndfl', 'to_pay')
+        self.result_tree = ttk.Treeview(table_frame, columns=columns, show='headings', height=12)
         
-        # Кнопки действий с результатами
+        # Настраиваем заголовки
+        self.result_tree.heading('name', text='Сотрудник')
+        self.result_tree.heading('salary', text='Оклад (руб.)')
+        self.result_tree.heading('norm_days', text='Норма дней')
+        self.result_tree.heading('worked_days', text='Отраб. дней')
+        self.result_tree.heading('accrued', text='Начислено')
+        self.result_tree.heading('ndfl', text='НДФЛ')
+        self.result_tree.heading('to_pay', text='К выплате')
+        
+        # Настраиваем ширину колонок
+        self.result_tree.column('name', width=180)
+        self.result_tree.column('salary', width=100, anchor='e')
+        self.result_tree.column('norm_days', width=90, anchor='center')
+        self.result_tree.column('worked_days', width=90, anchor='center')
+        self.result_tree.column('accrued', width=110, anchor='e')
+        self.result_tree.column('ndfl', width=100, anchor='e')
+        self.result_tree.column('to_pay', width=110, anchor='e')
+        
+        # Добавляем прокрутки
+        tree_scroll_y = ttk.Scrollbar(table_frame, orient='vertical', command=self.result_tree.yview)
+        tree_scroll_x = ttk.Scrollbar(table_frame, orient='horizontal', command=self.result_tree.xview)
+        self.result_tree.configure(yscrollcommand=tree_scroll_y.set, xscrollcommand=tree_scroll_x.set)
+        
+        # Размещаем таблицу и прокрутки
+        self.result_tree.pack(side='top', fill='both', expand=True)
+        
+        # Привязываем двойной клик для редактирования
+        self.result_tree.bind('<Double-Button-1>', self.on_tree_double_click)
+        
+        # Итоговые суммы под таблицей
+        totals_frame = ttk.Frame(table_frame)
+        totals_frame.pack(fill='x', pady=5)
+        
+        self.total_label = ttk.Label(totals_frame, text="", font=('Arial', 10, 'bold'))
+        self.total_label.pack(side='left', padx=10)
+        
+        # Правая часть - детализация НДФЛ
+        detail_frame = ttk.LabelFrame(main_panel, text="Детализация НДФЛ", padding=10)
+        detail_frame.pack(side='right', fill='both', padx=(10, 0))
+        
+        self.detail_tree = ttk.Treeview(detail_frame, 
+                                       columns=('name', 'ndfl_advance', 'ndfl_second', 'ndfl_total'), 
+                                       show='headings', height=12)
+        
+        self.detail_tree.heading('name', text='Сотрудник')
+        self.detail_tree.heading('ndfl_advance', text='НДФЛ с аванса')
+        self.detail_tree.heading('ndfl_second', text='НДФЛ со 2-й пол.')
+        self.detail_tree.heading('ndfl_total', text='НДФЛ всего')
+        
+        self.detail_tree.column('name', width=150)
+        self.detail_tree.column('ndfl_advance', width=120, anchor='e')
+        self.detail_tree.column('ndfl_second', width=120, anchor='e')
+        self.detail_tree.column('ndfl_total', width=120, anchor='e')
+        
+        self.detail_tree.pack(fill='both', expand=True)
+        
+        self.detail_total_label = ttk.Label(detail_frame, text="", font=('Arial', 9, 'bold'))
+        self.detail_total_label.pack(pady=5)
+        
+        # Кнопки действий
         btn_frame = ttk.Frame(self.parent)
         btn_frame.pack(fill='x', padx=5, pady=5)
         
@@ -87,15 +153,23 @@ class CalculationsTab:
                   command=self.send_to_messages).pack(side='left', padx=5)
         ttk.Button(btn_frame, text="📊 Экспорт в Excel", 
                   command=self.export_to_excel).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="💾 Сохранить в БД", 
+                  command=self.save_to_db).pack(side='left', padx=5)
 
     def refresh_clients_list(self, clients):
         """Обновление списка клиентов"""
         self.clients = clients
         client_names = [f"{c[1]} (ИНН: {c[2]})" for c in clients]
         self.calc_client_cb['values'] = client_names
-        if client_names:
+        if client_names and not self.calc_client_cb.get():
             self.calc_client_cb.current(0)
             self.update_month_info()
+
+    def on_client_changed(self, event=None):
+        """Обработчик смены клиента"""
+        self.update_month_info()
+        # Очищаем таблицу при смене клиента
+        self.clear_results()
 
     def update_month_info(self, event=None):
         """Обновление информации о выбранном месяце"""
@@ -112,109 +186,406 @@ class CalculationsTab:
                     text=f"📊 {info['name']} {year}: {info['workdays']} рабочих дней, "
                          f"{info['weekends']} выходных, {info['total_days']} всего"
                 )
-        except:
-            pass
+        except Exception as e:
+            logging.error(f"Ошибка обновления информации о месяце: {e}")
 
-    def calculate_payroll(self):
-        """Расчет зарплаты"""
-        if not self.calc_client_cb.get():
-            messagebox.showwarning("⚠️ Внимание", "Выберите клиента!")
-            return
-        
-        # Находим ID клиента
+    def on_payment_type_changed(self):
+        """Обработчик смены типа выплаты"""
+        # Если уже есть данные - пересчитываем
+        if self.current_employees:
+            self.recalculate_all()
+
+    def get_selected_client_id(self):
+        """Получение ID выбранного клиента"""
         selected = self.calc_client_cb.get()
-        client_id = None
+        if not selected:
+            return None
+        
         for c in self.clients:
             if f"{c[1]} (ИНН: {c[2]})" == selected:
-                client_id = c[0]
-                break
-        
-        if not client_id:
-            messagebox.showerror("❌ Ошибка", "Клиент не найден!")
-            return
-        
-        # Получаем месяц и год
+                return c[0]
+        return None
+
+    def get_selected_year_month(self):
+        """Получение выбранного года и месяца"""
         months = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
                  "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"]
         
         month_name = self.month_var.get()
-        if month_name in months:
-            month = months.index(month_name) + 1
-        else:
-            messagebox.showerror("❌ Ошибка", "Выберите месяц!")
-            return
+        if month_name not in months:
+            return None, None
+        
+        month = months.index(month_name) + 1
         
         try:
             year = int(self.year_var.get())
         except ValueError:
-            messagebox.showerror("❌ Ошибка", "Выберите год!")
+            return None, None
+        
+        return year, month
+
+    def calculate_payroll(self):
+        """Расчет зарплаты"""
+        client_id = self.get_selected_client_id()
+        if not client_id:
+            messagebox.showwarning("⚠️ Внимание", "Выберите клиента!")
+            return
+        
+        year, month = self.get_selected_year_month()
+        if not year:
+            messagebox.showerror("❌ Ошибка", "Выберите месяц и год!")
             return
         
         # Получаем сотрудников
-        employees = self.db.get_active_employees_for_month(client_id, year, month)
+        self.current_employees = self.db.get_active_employees_for_month(client_id, year, month)
         
-        if not employees:
-            self.result_text.delete(1.0, tk.END)
-            self.result_text.insert(1.0, "Нет сотрудников для расчета за этот месяц.")
+        if not self.current_employees:
+            self.clear_results()
+            messagebox.showinfo("ℹ️ Информация", "Нет сотрудников для расчета за этот месяц.")
             return
         
         # Выполняем расчет
-        payment_type = self.payment_type.get()
-        result = self.calculator.calculate_all(employees, year, month, payment_type)
+        self.recalculate_all()
         
-        # Форматируем вывод
-        output = []
-        month_info = self.calendar.get_month_info(year, month)
-        
-        if payment_type == "advance":
-            output.append(f"{'='*60}")
-            output.append(f"АВАНС за {month_name} {year}")
-            output.append(f"Рабочих дней в месяце: {month_info['workdays']}")
-            output.append(f"{'='*60}")
-            output.append("")
-            
-            for emp_result in result['results']:
-                calc = emp_result['calculation']
-                output.append(f"👤 {emp_result['name']}:")
-                output.append(f"   Отработано дней до 15 числа: {calc['worked_days']}")
-                output.append(f"   Начислено: {calc['amount_before_tax']:,} руб.")
-                output.append(f"   НДФЛ: {calc['ndfl']:,} руб.")
-                output.append(f"   К выплате: {calc['to_pay']:,} руб.")
-                if calc.get('note'):
-                    output.append(f"   ℹ️ {calc['note']}")
-                output.append("")
-        else:
-            output.append(f"{'='*60}")
-            output.append(f"ЗАРПЛАТА за {month_name} {year} (за вычетом аванса)")
-            output.append(f"Рабочих дней в месяце: {month_info['workdays']}")
-            output.append(f"{'='*60}")
-            output.append("")
-            
-            for emp_result in result['results']:
-                calc = emp_result['calculation']
-                output.append(f"👤 {emp_result['name']}:")
-                output.append(f"   Отработано дней: {calc['worked_days']} из {calc['total_workdays']}")
-                output.append(f"   Начислено за месяц: {calc['full_salary']:,} руб.")
-                output.append(f"   НДФЛ за месяц: {calc['ndfl_full']:,} руб.")
-                output.append(f"   Аванс (удержан): {calc['advance_paid']:,} руб.")
-                output.append(f"   К выплате: {calc['to_pay']:,} руб.")
-                if calc.get('note'):
-                    output.append(f"   ℹ️ {calc['note']}")
-                output.append("")
-        
-        output.append(f"{'='*60}")
-        output.append(f"💰 ИТОГО к выплате: {result['total_to_pay']:,} руб.")
-        output.append(f"💸 НДФЛ (удержан): {result['total_ndfl']:,} руб.")
-        output.append(f"{'='*60}")
-        
-        self.result_text.delete(1.0, tk.END)
-        self.result_text.insert(1.0, "\n".join(output))
-        
+        payment_type = "аванса" if self.payment_type.get() == "advance" else "зарплаты"
         logging.info(f"Выполнен расчет {payment_type} для клиента ID={client_id} за {month}.{year}")
+
+    def recalculate_all(self):
+        """Пересчет всех сотрудников"""
+        year, month = self.get_selected_year_month()
+        if not year:
+            return
+        
+        payment_type = self.payment_type.get()
+        
+        # Собираем ручные вводы дней
+        worked_days_dict = {}
+        for emp in self.current_employees:
+            emp_id = emp[0]
+            if emp_id in self.editable_entries:
+                try:
+                    days = int(self.editable_entries[emp_id].get())
+                    if days >= 0:
+                        worked_days_dict[emp_id] = days
+                except ValueError:
+                    pass
+        
+        # Выполняем расчет
+        result = self.calculator.calculate_all(
+            self.current_employees, year, month, payment_type, worked_days_dict
+        )
+        
+        # Обновляем таблицы
+        self.update_results_table(result)
+        self.update_detail_table(result)
+
+    def update_results_table(self, result):
+        """Обновление основной таблицы результатов"""
+        # Очищаем таблицу и словарь Entry
+        self.result_tree.delete(*self.result_tree.get_children())
+        self.editable_entries.clear()
+        
+        total_workdays = 0
+        
+        for emp_result in result['results']:
+            calc = emp_result['calculation']
+            emp_id = emp_result['id']
+            emp_name = emp_result['name']
+            
+            # Ищем оклад сотрудника
+            salary = 0
+            for emp in self.current_employees:
+                if emp[0] == emp_id:
+                    salary = emp[2]
+                    break
+            
+            total_workdays = calc.get('total_workdays', 0)
+            worked_days = calc.get('worked_days', 0)
+            accrued = calc.get('full_salary', calc.get('amount_before_tax', 0))
+            ndfl = calc.get('ndfl_full', calc.get('ndfl', 0))
+            to_pay = calc.get('to_pay', 0)
+            
+            # Вставляем строку
+            values = (
+                emp_name,
+                f"{salary:,}",
+                total_workdays,
+                worked_days,  # Будет заменено на Entry
+                f"{accrued:,}",
+                f"{ndfl:,}",
+                f"{to_pay:,}"
+            )
+            
+            item_id = self.result_tree.insert('', 'end', values=values, tags=(str(emp_id),))
+            
+            # Создаем редактируемую ячейку для отработанных дней
+            self.create_editable_cell(item_id, emp_id, worked_days, total_workdays)
+        
+        # Обновляем итоги
+        total_to_pay = result['total_to_pay']
+        total_ndfl = result['total_ndfl']
+        
+        self.total_label.config(
+            text=f"💰 Итого к выплате: {total_to_pay:,} руб.  |  💸 НДФЛ удержан: {total_ndfl:,} руб."
+        )
+
+    def create_editable_cell(self, item_id, emp_id, worked_days, total_workdays):
+        """Создание редактируемой ячейки для отработанных дней"""
+        # Получаем координаты ячейки
+        bbox = self.result_tree.bbox(item_id, column='worked_days')
+        if not bbox:
+            return
+        
+        x, y, width, height = bbox
+        
+        # Создаем Entry поверх ячейки
+        entry = tk.Entry(self.result_tree, justify='center', font=('Arial', 9))
+        entry.insert(0, str(worked_days))
+        entry.place(x=x, y=y, width=width, height=height)
+        
+        # Сохраняем Entry в словарь
+        self.editable_entries[emp_id] = entry
+        
+        # Привязываем события
+        entry.bind('<Return>', lambda e, eid=emp_id: self.on_days_changed(eid))
+        entry.bind('<FocusOut>', lambda e, eid=emp_id: self.on_days_changed(eid))
+        entry.bind('<Up>', lambda e: self.focus_previous_entry(e.widget))
+        entry.bind('<Down>', lambda e: self.focus_next_entry(e.widget))
+
+    def on_days_changed(self, emp_id):
+        """Обработчик изменения количества дней"""
+        try:
+            entry = self.editable_entries.get(emp_id)
+            if not entry:
+                return
+            
+            days_str = entry.get().strip()
+            if not days_str:
+                return
+            
+            days = int(days_str)
+            
+            # Получаем норму дней
+            year, month = self.get_selected_year_month()
+            if not year:
+                return
+            
+            total_workdays = self.calendar.get_workdays_in_month(year, month)
+            
+            # Проверяем, что дни не превышают норму
+            if days > total_workdays:
+                entry.config(foreground='red')
+                self.app.set_status(f"⚠️ Количество дней не может превышать норму ({total_workdays})!")
+                return
+            elif days < 0:
+                entry.config(foreground='red')
+                self.app.set_status("⚠️ Количество дней не может быть отрицательным!")
+                return
+            else:
+                entry.config(foreground='black')
+            
+            # Пересчитываем только этого сотрудника
+            self.recalculate_single(emp_id, days)
+            
+        except ValueError:
+            entry.config(foreground='red')
+            self.app.set_status("⚠️ Введите корректное число дней!")
+        except Exception as e:
+            logging.error(f"Ошибка при изменении дней: {e}")
+
+    def recalculate_single(self, emp_id, worked_days):
+        """Пересчет одного сотрудника"""
+        year, month = self.get_selected_year_month()
+        if not year:
+            return
+        
+        payment_type = self.payment_type.get()
+        
+        # Находим сотрудника
+        emp_data = None
+        for emp in self.current_employees:
+            if emp[0] == emp_id:
+                emp_data = emp
+                break
+        
+        if not emp_data:
+            return
+        
+        # Выполняем расчет
+        calc = self.calculator.calculate_single(emp_data, year, month, worked_days, payment_type)
+        
+        # Обновляем строку в таблице
+        for item_id in self.result_tree.get_children():
+            if str(emp_id) in self.result_tree.item(item_id)['tags']:
+                salary = emp_data[2]
+                accrued = calc.get('full_salary', calc.get('amount_before_tax', 0))
+                ndfl = calc.get('ndfl_full', calc.get('ndfl', 0))
+                to_pay = calc.get('to_pay', 0)
+                
+                self.result_tree.item(item_id, values=(
+                    emp_data[1],
+                    f"{salary:,}",
+                    calc.get('total_workdays', 0),
+                    worked_days,
+                    f"{accrued:,}",
+                    f"{ndfl:,}",
+                    f"{to_pay:,}"
+                ))
+                break
+        
+        # Обновляем итоги и детализацию
+        self.recalculate_totals()
+        self.recalculate_detail()
+
+    def recalculate_totals(self):
+        """Пересчет итоговых сумм"""
+        total_to_pay = 0
+        total_ndfl = 0
+        
+        for item_id in self.result_tree.get_children():
+            values = self.result_tree.item(item_id)['values']
+            # Парсим значения из строки (убираем запятые)
+            try:
+                ndfl_str = values[5].replace(',', '')
+                to_pay_str = values[6].replace(',', '')
+                total_ndfl += int(ndfl_str)
+                total_to_pay += int(to_pay_str)
+            except (ValueError, IndexError):
+                pass
+        
+        self.total_label.config(
+            text=f"💰 Итого к выплате: {total_to_pay:,} руб.  |  💸 НДФЛ удержан: {total_ndfl:,} руб."
+        )
+
+    def update_detail_table(self, result):
+        """Обновление таблицы детализации НДФЛ"""
+        self.detail_tree.delete(*self.detail_tree.get_children())
+        
+        if result.get('type') == 'advance' or self.payment_type.get() == 'advance':
+            # Для аванса детализация не нужна
+            self.detail_total_label.config(text="Для аванса НДФЛ удерживается единой суммой")
+            return
+        
+        total_ndfl_advance = 0
+        total_ndfl_second = 0
+        total_ndfl = 0
+        
+        for emp_result in result['results']:
+            calc = emp_result['calculation']
+            
+            ndfl_advance = calc.get('ndfl_advance', 0)
+            ndfl_second = calc.get('ndfl_second_half', 0)
+            ndfl_total = calc.get('ndfl_full', 0)
+            
+            self.detail_tree.insert('', 'end', values=(
+                emp_result['name'],
+                f"{ndfl_advance:,}",
+                f"{ndfl_second:,}",
+                f"{ndfl_total:,}"
+            ))
+            
+            total_ndfl_advance += ndfl_advance
+            total_ndfl_second += ndfl_second
+            total_ndfl += ndfl_total
+        
+        self.detail_total_label.config(
+            text=f"Итого: с аванса {total_ndfl_advance:,} руб. | "
+                 f"со 2-й пол. {total_ndfl_second:,} руб. | "
+                 f"всего {total_ndfl:,} руб."
+        )
+
+    def recalculate_detail(self):
+        """Пересчет детализации НДФЛ после изменения дней"""
+        # Собираем текущие данные из основной таблицы
+        year, month = self.get_selected_year_month()
+        if not year:
+            return
+        
+        payment_type = self.payment_type.get()
+        if payment_type == 'advance':
+            return
+        
+        worked_days_dict = {}
+        for emp_id, entry in self.editable_entries.items():
+            try:
+                days = int(entry.get())
+                if days >= 0:
+                    worked_days_dict[emp_id] = days
+            except ValueError:
+                pass
+        
+        result = self.calculator.calculate_all(
+            self.current_employees, year, month, payment_type, worked_days_dict
+        )
+        
+        self.update_detail_table(result)
+
+    def clear_results(self):
+        """Очистка результатов"""
+        self.result_tree.delete(*self.result_tree.get_children())
+        self.detail_tree.delete(*self.detail_tree.get_children())
+        self.editable_entries.clear()
+        self.current_employees = []
+        self.total_label.config(text="")
+        self.detail_total_label.config(text="")
+
+    def focus_previous_entry(self, current_entry):
+        """Перемещение фокуса на предыдущий Entry"""
+        entries = list(self.editable_entries.values())
+        if current_entry in entries:
+            idx = entries.index(current_entry)
+            if idx > 0:
+                entries[idx - 1].focus()
+
+    def focus_next_entry(self, current_entry):
+        """Перемещение фокуса на следующий Entry"""
+        entries = list(self.editable_entries.values())
+        if current_entry in entries:
+            idx = entries.index(current_entry)
+            if idx < len(entries) - 1:
+                entries[idx + 1].focus()
+
+    def on_tree_double_click(self, event):
+        """Обработчик двойного клика по таблице"""
+        # Определяем, на какую строку и колонку кликнули
+        region = self.result_tree.identify_region(event.x, event.y)
+        if region == 'cell':
+            column = self.result_tree.identify_column(event.x)
+            # Если кликнули на колонку с днями - активируем редактирование
+            if column == '#4':  # Колонка worked_days
+                item_id = self.result_tree.identify_row(event.y)
+                if item_id and item_id in self.result_tree.get_children():
+                    # Находим соответствующий Entry и фокусируемся на нем
+                    for emp_id, entry in self.editable_entries.items():
+                        if str(emp_id) in self.result_tree.item(item_id)['tags']:
+                            entry.focus()
+                            entry.select_range(0, tk.END)
+                            break
+
+    def save_to_db(self):
+        """Сохранение расчета в базу данных"""
+        if not self.current_employees:
+            messagebox.showwarning("⚠️ Внимание", "Нет данных для сохранения!")
+            return
+        
+        client_id = self.get_selected_client_id()
+        year, month = self.get_selected_year_month()
+        
+        if not client_id or not year:
+            messagebox.showerror("❌ Ошибка", "Выберите клиента, месяц и год!")
+            return
+        
+        # Здесь будет вызов метода сохранения в БД
+        # Пока заглушка
+        messagebox.showinfo("💾 Сохранение", 
+                          "Функция сохранения в БД будет добавлена на следующем этапе.\n"
+                          f"Клиент ID={client_id}, период {month}.{year}")
+        
+        logging.info(f"Запрошено сохранение расчета для клиента ID={client_id} за {month}.{year}")
 
     def copy_to_clipboard(self):
         """Копирование результата в буфер обмена"""
-        text = self.result_text.get(1.0, tk.END).strip()
+        text = self.generate_report_text()
         if text:
             self.parent.clipboard_clear()
             self.parent.clipboard_append(text)
@@ -224,13 +595,44 @@ class CalculationsTab:
 
     def send_to_messages(self):
         """Отправка результата на вкладку Сообщения"""
-        text = self.result_text.get(1.0, tk.END).strip()
+        text = self.generate_report_text()
         if text:
             self.app.messages_tab.add_message(text)
-            self.app.notebook.select(3)  # Переключаемся на вкладку Сообщения
+            self.app.notebook.select(3)
             messagebox.showinfo("✅ Успех", "Результат отправлен на вкладку Сообщения!")
         else:
             messagebox.showwarning("⚠️ Внимание", "Нет данных для отправки!")
+
+    def generate_report_text(self):
+        """Генерация текстового отчета"""
+        if not self.result_tree.get_children():
+            return ""
+        
+        year, month = self.get_selected_year_month()
+        month_name = self.month_var.get()
+        payment_type = "Аванс" if self.payment_type.get() == "advance" else "Зарплата"
+        
+        lines = []
+        lines.append(f"{'='*60}")
+        lines.append(f"{payment_type.upper()} за {month_name} {year}")
+        lines.append(f"{'='*60}")
+        lines.append("")
+        
+        for item_id in self.result_tree.get_children():
+            values = self.result_tree.item(item_id)['values']
+            lines.append(f"👤 {values[0]}:")
+            lines.append(f"   Оклад: {values[1]} руб.")
+            lines.append(f"   Отработано дней: {values[3]} из {values[2]}")
+            lines.append(f"   Начислено: {values[4]} руб.")
+            lines.append(f"   НДФЛ: {values[5]} руб.")
+            lines.append(f"   К выплате: {values[6]} руб.")
+            lines.append("")
+        
+        lines.append(f"{'='*60}")
+        lines.append(self.total_label.cget('text'))
+        lines.append(f"{'='*60}")
+        
+        return "\n".join(lines)
 
     def export_to_excel(self):
         """Экспорт результатов в Excel"""
@@ -238,19 +640,32 @@ class CalculationsTab:
             import openpyxl
             from datetime import datetime
             
-            text = self.result_text.get(1.0, tk.END).strip()
-            if not text:
+            if not self.result_tree.get_children():
                 messagebox.showwarning("⚠️ Внимание", "Нет данных для экспорта!")
                 return
             
-            # Создаем Excel файл
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Расчет зарплаты"
             
-            # Записываем данные построчно
-            for i, line in enumerate(text.split('\n'), 1):
-                ws.cell(row=i, column=1, value=line)
+            # Заголовки
+            headers = ['Сотрудник', 'Оклад', 'Норма дней', 'Отработано дней', 
+                      'Начислено', 'НДФЛ', 'К выплате']
+            for col, header in enumerate(headers, 1):
+                ws.cell(row=1, column=col, value=header)
+            
+            # Данные
+            for i, item_id in enumerate(self.result_tree.get_children(), 2):
+                values = self.result_tree.item(item_id)['values']
+                for j, val in enumerate(values, 1):
+                    # Убираем запятые для числовых значений
+                    if j > 1:
+                        try:
+                            ws.cell(row=i, column=j, value=int(val.replace(',', '')))
+                        except ValueError:
+                            ws.cell(row=i, column=j, value=val)
+                    else:
+                        ws.cell(row=i, column=j, value=val)
             
             # Сохраняем файл
             filename = f"Расчет_зарплаты_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
