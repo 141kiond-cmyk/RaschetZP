@@ -12,8 +12,8 @@ class CalculationsTab:
         self.app = app
         self.clients = []
         self.calculator = PayrollCalculator(calendar)
-        self.current_employees = []  # Текущий список сотрудников для расчета
-        self.editable_entries = {}  # Словарь для хранения Entry виджетов
+        self.current_employees = []
+        self.editable_entries = {}
         
         self.create_widgets()
         logging.info("Вкладка 'Расчеты' создана")
@@ -67,6 +67,8 @@ class CalculationsTab:
         
         ttk.Button(row2, text="🧮 Рассчитать", 
                   command=self.calculate_payroll).pack(side='right', padx=20)
+        ttk.Button(row2, text="📂 Загрузить сохраненное", 
+                  command=self.load_saved).pack(side='right', padx=5)
         
         # Информация о месяце
         self.month_info_label = ttk.Label(top_frame, text="", foreground='blue')
@@ -84,7 +86,6 @@ class CalculationsTab:
         columns = ('name', 'salary', 'norm_days', 'worked_days', 'accrued', 'ndfl', 'to_pay')
         self.result_tree = ttk.Treeview(table_frame, columns=columns, show='headings', height=12)
         
-        # Настраиваем заголовки
         self.result_tree.heading('name', text='Сотрудник')
         self.result_tree.heading('salary', text='Оклад (руб.)')
         self.result_tree.heading('norm_days', text='Норма дней')
@@ -93,7 +94,6 @@ class CalculationsTab:
         self.result_tree.heading('ndfl', text='НДФЛ')
         self.result_tree.heading('to_pay', text='К выплате')
         
-        # Настраиваем ширину колонок
         self.result_tree.column('name', width=180)
         self.result_tree.column('salary', width=100, anchor='e')
         self.result_tree.column('norm_days', width=90, anchor='center')
@@ -103,17 +103,16 @@ class CalculationsTab:
         self.result_tree.column('to_pay', width=110, anchor='e')
         
         # Добавляем прокрутки
-        tree_scroll_y = ttk.Scrollbar(table_frame, orient='vertical', command=self.result_tree.yview)
-        tree_scroll_x = ttk.Scrollbar(table_frame, orient='horizontal', command=self.result_tree.xview)
-        self.result_tree.configure(yscrollcommand=tree_scroll_y.set, xscrollcommand=tree_scroll_x.set)
+        tree_scroll = ttk.Scrollbar(table_frame, orient='vertical', command=self.result_tree.yview)
+        self.result_tree.configure(yscrollcommand=tree_scroll.set)
         
-        # Размещаем таблицу и прокрутки
-        self.result_tree.pack(side='top', fill='both', expand=True)
+        self.result_tree.pack(side='left', fill='both', expand=True)
+        tree_scroll.pack(side='right', fill='y')
         
         # Привязываем двойной клик для редактирования
         self.result_tree.bind('<Double-Button-1>', self.on_tree_double_click)
         
-        # Итоговые суммы под таблицей
+        # Итоговые суммы
         totals_frame = ttk.Frame(table_frame)
         totals_frame.pack(fill='x', pady=5)
         
@@ -168,7 +167,6 @@ class CalculationsTab:
     def on_client_changed(self, event=None):
         """Обработчик смены клиента"""
         self.update_month_info()
-        # Очищаем таблицу при смене клиента
         self.clear_results()
 
     def update_month_info(self, event=None):
@@ -191,7 +189,6 @@ class CalculationsTab:
 
     def on_payment_type_changed(self):
         """Обработчик смены типа выплаты"""
-        # Если уже есть данные - пересчитываем
         if self.current_employees:
             self.recalculate_all()
 
@@ -236,7 +233,6 @@ class CalculationsTab:
             messagebox.showerror("❌ Ошибка", "Выберите месяц и год!")
             return
         
-        # Получаем сотрудников
         self.current_employees = self.db.get_active_employees_for_month(client_id, year, month)
         
         if not self.current_employees:
@@ -244,7 +240,6 @@ class CalculationsTab:
             messagebox.showinfo("ℹ️ Информация", "Нет сотрудников для расчета за этот месяц.")
             return
         
-        # Выполняем расчет
         self.recalculate_all()
         
         payment_type = "аванса" if self.payment_type.get() == "advance" else "зарплаты"
@@ -270,29 +265,24 @@ class CalculationsTab:
                 except ValueError:
                     pass
         
-        # Выполняем расчет
         result = self.calculator.calculate_all(
             self.current_employees, year, month, payment_type, worked_days_dict
         )
         
-        # Обновляем таблицы
         self.update_results_table(result)
         self.update_detail_table(result)
 
     def update_results_table(self, result):
         """Обновление основной таблицы результатов"""
-        # Очищаем таблицу и словарь Entry
         self.result_tree.delete(*self.result_tree.get_children())
         self.editable_entries.clear()
-        
-        total_workdays = 0
         
         for emp_result in result['results']:
             calc = emp_result['calculation']
             emp_id = emp_result['id']
             emp_name = emp_result['name']
             
-            # Ищем оклад сотрудника
+            # Ищем оклад
             salary = 0
             for emp in self.current_employees:
                 if emp[0] == emp_id:
@@ -305,12 +295,11 @@ class CalculationsTab:
             ndfl = calc.get('ndfl_full', calc.get('ndfl', 0))
             to_pay = calc.get('to_pay', 0)
             
-            # Вставляем строку
             values = (
                 emp_name,
                 f"{salary:,}",
                 total_workdays,
-                worked_days,  # Будет заменено на Entry
+                worked_days,
                 f"{accrued:,}",
                 f"{ndfl:,}",
                 f"{to_pay:,}"
@@ -318,7 +307,7 @@ class CalculationsTab:
             
             item_id = self.result_tree.insert('', 'end', values=values, tags=(str(emp_id),))
             
-            # Создаем редактируемую ячейку для отработанных дней
+            # Создаем редактируемую ячейку
             self.create_editable_cell(item_id, emp_id, worked_days, total_workdays)
         
         # Обновляем итоги
@@ -343,7 +332,6 @@ class CalculationsTab:
         entry.insert(0, str(worked_days))
         entry.place(x=x, y=y, width=width, height=height)
         
-        # Сохраняем Entry в словарь
         self.editable_entries[emp_id] = entry
         
         # Привязываем события
@@ -365,14 +353,12 @@ class CalculationsTab:
             
             days = int(days_str)
             
-            # Получаем норму дней
             year, month = self.get_selected_year_month()
             if not year:
                 return
             
             total_workdays = self.calendar.get_workdays_in_month(year, month)
             
-            # Проверяем, что дни не превышают норму
             if days > total_workdays:
                 entry.config(foreground='red')
                 self.app.set_status(f"⚠️ Количество дней не может превышать норму ({total_workdays})!")
@@ -384,7 +370,6 @@ class CalculationsTab:
             else:
                 entry.config(foreground='black')
             
-            # Пересчитываем только этого сотрудника
             self.recalculate_single(emp_id, days)
             
         except ValueError:
@@ -401,7 +386,6 @@ class CalculationsTab:
         
         payment_type = self.payment_type.get()
         
-        # Находим сотрудника
         emp_data = None
         for emp in self.current_employees:
             if emp[0] == emp_id:
@@ -411,7 +395,6 @@ class CalculationsTab:
         if not emp_data:
             return
         
-        # Выполняем расчет
         calc = self.calculator.calculate_single(emp_data, year, month, worked_days, payment_type)
         
         # Обновляем строку в таблице
@@ -433,7 +416,6 @@ class CalculationsTab:
                 ))
                 break
         
-        # Обновляем итоги и детализацию
         self.recalculate_totals()
         self.recalculate_detail()
 
@@ -444,7 +426,6 @@ class CalculationsTab:
         
         for item_id in self.result_tree.get_children():
             values = self.result_tree.item(item_id)['values']
-            # Парсим значения из строки (убираем запятые)
             try:
                 ndfl_str = values[5].replace(',', '')
                 to_pay_str = values[6].replace(',', '')
@@ -461,8 +442,7 @@ class CalculationsTab:
         """Обновление таблицы детализации НДФЛ"""
         self.detail_tree.delete(*self.detail_tree.get_children())
         
-        if result.get('type') == 'advance' or self.payment_type.get() == 'advance':
-            # Для аванса детализация не нужна
+        if self.payment_type.get() == 'advance':
             self.detail_total_label.config(text="Для аванса НДФЛ удерживается единой суммой")
             return
         
@@ -495,8 +475,7 @@ class CalculationsTab:
         )
 
     def recalculate_detail(self):
-        """Пересчет детализации НДФЛ после изменения дней"""
-        # Собираем текущие данные из основной таблицы
+        """Пересчет детализации НДФЛ"""
         year, month = self.get_selected_year_month()
         if not year:
             return
@@ -547,15 +526,12 @@ class CalculationsTab:
 
     def on_tree_double_click(self, event):
         """Обработчик двойного клика по таблице"""
-        # Определяем, на какую строку и колонку кликнули
         region = self.result_tree.identify_region(event.x, event.y)
         if region == 'cell':
             column = self.result_tree.identify_column(event.x)
-            # Если кликнули на колонку с днями - активируем редактирование
             if column == '#4':  # Колонка worked_days
                 item_id = self.result_tree.identify_row(event.y)
                 if item_id and item_id in self.result_tree.get_children():
-                    # Находим соответствующий Entry и фокусируемся на нем
                     for emp_id, entry in self.editable_entries.items():
                         if str(emp_id) in self.result_tree.item(item_id)['tags']:
                             entry.focus()
@@ -575,13 +551,134 @@ class CalculationsTab:
             messagebox.showerror("❌ Ошибка", "Выберите клиента, месяц и год!")
             return
         
-        # Здесь будет вызов метода сохранения в БД
-        # Пока заглушка
-        messagebox.showinfo("💾 Сохранение", 
-                          "Функция сохранения в БД будет добавлена на следующем этапе.\n"
-                          f"Клиент ID={client_id}, период {month}.{year}")
+        payment_type = self.payment_type.get()
+        saved_count = 0
         
-        logging.info(f"Запрошено сохранение расчета для клиента ID={client_id} за {month}.{year}")
+        for emp in self.current_employees:
+            emp_id = emp[0]
+            
+            # Получаем отработанные дни
+            worked_days = None
+            if emp_id in self.editable_entries:
+                try:
+                    worked_days = int(self.editable_entries[emp_id].get())
+                except ValueError:
+                    worked_days = 0
+            else:
+                # Если не редактировали - берем из таблицы
+                for item_id in self.result_tree.get_children():
+                    if str(emp_id) in self.result_tree.item(item_id)['tags']:
+                        values = self.result_tree.item(item_id)['values']
+                        worked_days = int(values[3])
+                        break
+            
+            if worked_days is None:
+                continue
+            
+            # Выполняем расчет
+            calc = self.calculator.calculate_single(emp, year, month, worked_days, payment_type)
+            
+            # Сохраняем в БД
+            total_workdays = calc.get('total_workdays', 0)
+            accrued = calc.get('full_salary', calc.get('amount_before_tax', 0))
+            ndfl = calc.get('ndfl_full', calc.get('ndfl', 0))
+            ndfl_advance = calc.get('ndfl_advance', 0)
+            ndfl_second = calc.get('ndfl_second_half', 0)
+            advance_paid = calc.get('advance_paid', 0)
+            to_pay = calc.get('to_pay', 0)
+            
+            success = self.db.save_calculation(
+                client_id, emp_id, year, month, payment_type,
+                worked_days, total_workdays, accrued, ndfl,
+                ndfl_advance, ndfl_second, advance_paid, to_pay
+            )
+            
+            if success:
+                saved_count += 1
+        
+        if saved_count > 0:
+            self.app.set_status(f"✅ Сохранено {saved_count} расчетов")
+            messagebox.showinfo("💾 Успех", f"Сохранено {saved_count} расчетов в базу данных!")
+        else:
+            messagebox.showerror("❌ Ошибка", "Не удалось сохранить расчеты!")
+
+    def load_saved(self):
+        """Загрузка сохраненных расчетов"""
+        client_id = self.get_selected_client_id()
+        year, month = self.get_selected_year_month()
+        
+        if not client_id or not year:
+            messagebox.showwarning("⚠️ Внимание", "Выберите клиента, месяц и год!")
+            return
+        
+        # Получаем сохраненные расчеты
+        saved = self.db.get_saved_calculations(client_id, year, month)
+        
+        if not saved:
+            messagebox.showinfo("ℹ️ Информация", "Нет сохраненных расчетов за этот период.")
+            return
+        
+        # Определяем тип выплаты по первому сохраненному расчету
+        payment_type = saved[0][2]  # payment_type в позиции 2
+        
+        # Устанавливаем тип выплаты
+        self.payment_type.set(payment_type)
+        
+        # Получаем сотрудников
+        self.current_employees = self.db.get_active_employees_for_month(client_id, year, month)
+        
+        if not self.current_employees:
+            messagebox.showinfo("ℹ️ Информация", "Нет активных сотрудников для отображения.")
+            return
+        
+        # Отображаем сохраненные данные
+        self.result_tree.delete(*self.result_tree.get_children())
+        self.editable_entries.clear()
+        
+        total_to_pay = 0
+        total_ndfl = 0
+        
+        for calc_data in saved:
+            # Распаковываем данные
+            calc_id, emp_name, pay_type, worked_days, total_workdays, \
+            accrued, ndfl, ndfl_advance, ndfl_second, advance_paid, to_pay, created_at = calc_data
+            
+            # Находим сотрудника
+            emp_id = None
+            salary = 0
+            for emp in self.current_employees:
+                if emp[1] == emp_name:
+                    emp_id = emp[0]
+                    salary = emp[2]
+                    break
+            
+            if not emp_id:
+                continue
+            
+            values = (
+                emp_name,
+                f"{salary:,}",
+                total_workdays,
+                worked_days,
+                f"{accrued:,}",
+                f"{ndfl:,}",
+                f"{to_pay:,}"
+            )
+            
+            item_id = self.result_tree.insert('', 'end', values=values, tags=(str(emp_id),))
+            self.create_editable_cell(item_id, emp_id, worked_days, total_workdays)
+            
+            total_ndfl += int(ndfl)
+            total_to_pay += int(to_pay)
+        
+        self.total_label.config(
+            text=f"💰 Итого к выплате: {total_to_pay:,} руб.  |  💸 НДФЛ удержан: {total_ndfl:,} руб."
+        )
+        
+        # Обновляем детализацию
+        self.recalculate_detail()
+        
+        self.app.set_status(f"📂 Загружены сохраненные расчеты за {month}.{year}")
 
     def copy_to_clipboard(self):
         """Копирование результата в буфер обмена"""
@@ -638,7 +735,6 @@ class CalculationsTab:
         """Экспорт результатов в Excel"""
         try:
             import openpyxl
-            from datetime import datetime
             
             if not self.result_tree.get_children():
                 messagebox.showwarning("⚠️ Внимание", "Нет данных для экспорта!")
@@ -658,7 +754,6 @@ class CalculationsTab:
             for i, item_id in enumerate(self.result_tree.get_children(), 2):
                 values = self.result_tree.item(item_id)['values']
                 for j, val in enumerate(values, 1):
-                    # Убираем запятые для числовых значений
                     if j > 1:
                         try:
                             ws.cell(row=i, column=j, value=int(val.replace(',', '')))
@@ -667,7 +762,6 @@ class CalculationsTab:
                     else:
                         ws.cell(row=i, column=j, value=val)
             
-            # Сохраняем файл
             filename = f"Расчет_зарплаты_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             wb.save(filename)
             
