@@ -20,6 +20,7 @@ class Database:
 
     def create_tables(self):
         """Создание таблиц, если их ещё нет"""
+        # Таблица клиентов (ИП)
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS clients (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,6 +31,7 @@ class Database:
             )
         ''')
         
+        # Таблица сотрудников
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS employees (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,6 +45,30 @@ class Database:
                 FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
             )
         ''')
+        
+        # Таблица для сохранения истории расчетов
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS calculations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                employee_id INTEGER NOT NULL,
+                year INTEGER NOT NULL,
+                month INTEGER NOT NULL,
+                payment_type TEXT NOT NULL,
+                worked_days INTEGER NOT NULL,
+                total_workdays INTEGER NOT NULL,
+                accrued REAL NOT NULL,
+                ndfl REAL NOT NULL,
+                ndfl_advance REAL DEFAULT 0,
+                ndfl_second_half REAL DEFAULT 0,
+                advance_paid REAL DEFAULT 0,
+                to_pay REAL NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
+            )
+        ''')
+        
         self.conn.commit()
         logging.info("Таблицы созданы/проверены")
 
@@ -63,6 +89,11 @@ class Database:
         self.cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_clients_inn 
             ON clients(inn)
+        ''')
+        # Индекс для быстрого поиска расчетов по клиенту и периоду
+        self.cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_calculations_period 
+            ON calculations(client_id, year, month)
         ''')
         self.conn.commit()
         logging.info("Индексы созданы для ускорения поиска")
@@ -274,6 +305,50 @@ class Database:
             AND (fire_date IS NULL OR fire_date >= ?)
             AND is_active = 1
         ''', (client_id, month_end, month_start))
+        return self.cursor.fetchall()
+
+    # ---------- СОХРАНЕНИЕ И ЗАГРУЗКА РАСЧЕТОВ ----------
+    def save_calculation(self, client_id, employee_id, year, month, payment_type,
+                         worked_days, total_workdays, accrued, ndfl, 
+                         ndfl_advance=0, ndfl_second_half=0, advance_paid=0, to_pay=0):
+        """Сохранение расчета в базу данных"""
+        try:
+            # Сначала удаляем старый расчет за этот период, если есть
+            self.cursor.execute('''
+                DELETE FROM calculations 
+                WHERE client_id=? AND employee_id=? AND year=? AND month=? AND payment_type=?
+            ''', (client_id, employee_id, year, month, payment_type))
+            
+            # Сохраняем новый расчет
+            self.cursor.execute('''
+                INSERT INTO calculations 
+                (client_id, employee_id, year, month, payment_type, 
+                 worked_days, total_workdays, accrued, ndfl, 
+                 ndfl_advance, ndfl_second_half, advance_paid, to_pay)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (client_id, employee_id, year, month, payment_type,
+                  worked_days, total_workdays, accrued, ndfl,
+                  ndfl_advance, ndfl_second_half, advance_paid, to_pay))
+            
+            self.conn.commit()
+            logging.info(f"Расчет сохранен: сотрудник ID={employee_id}, {month}.{year}, тип={payment_type}")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Ошибка сохранения расчета: {e}")
+            return False
+
+    def get_saved_calculations(self, client_id, year, month):
+        """Получение сохраненных расчетов за период"""
+        self.cursor.execute('''
+            SELECT c.id, e.full_name, c.payment_type, c.worked_days, c.total_workdays,
+                   c.accrued, c.ndfl, c.ndfl_advance, c.ndfl_second_half, 
+                   c.advance_paid, c.to_pay, c.created_at
+            FROM calculations c
+            JOIN employees e ON c.employee_id = e.id
+            WHERE c.client_id=? AND c.year=? AND c.month=?
+            ORDER BY e.full_name, c.payment_type
+        ''', (client_id, year, month))
         return self.cursor.fetchall()
 
     def close(self):
